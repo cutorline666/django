@@ -1,6 +1,8 @@
 from django.contrib.auth.models import User
 import os
 import uuid
+import shutil
+import os
 from unittest import SkipTest
 
 from django.contrib.auth import get_user_model
@@ -13,6 +15,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+
+SKIP_SELENIUM = (os.environ.get('CI') == 'true' and shutil.which('google-chrome') is None and shutil.which('chromium') is None)
 
 class AdminGroupsSeleniumTests(StaticLiveServerTestCase):
 
