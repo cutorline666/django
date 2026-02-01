@@ -1,12 +1,14 @@
+import os
 import uuid
+from unittest import SkipTest
 
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
-from django.contrib.auth.models import User
 
 from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -17,50 +19,49 @@ class AdminGroupsSeleniumTests(StaticLiveServerTestCase):
         super().setUpClass()
 
         opts = Options()
-        opts.add_argument("--headless=new")
+        if os.environ.get("HEADLESS", "true").lower() in ("1", "true", "yes"):
+            opts.add_argument("--headless=new")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
-        opts.add_argument("--window-size=1920,1080")
-        opts.add_argument("--disable-gpu")
+        opts.add_argument("--window-size=1400,1000")
 
-        cls.selenium = Chrome(options=opts)
-        cls.selenium.implicitly_wait(5)
-
-        u = User.objects.create_user("isard", "isard@isardvdi.com", "pirineus")
-        u.is_superuser = True
-        u.is_staff = True
-        u.save()
+        try:
+            cls.selenium = Chrome(options=opts)
+            cls.selenium.implicitly_wait(0)
+        except Exception as e:
+            raise SkipTest(f"Selenium/Chrome no disponible: {e}")
 
     @classmethod
     def tearDownClass(cls):
         try:
-            cls.selenium.quit()
+            if hasattr(cls, "selenium"):
+                cls.selenium.quit()
         finally:
             super().tearDownClass()
 
-    def wait(self, secs=10):
-        return WebDriverWait(self.selenium, secs)
+    @classmethod
+    def setUpTestData(cls):
+        User = get_user_model()
+        cls.admin_user = User.objects.create_superuser(
+            username="admin",
+            email="admin@example.com",
+            password="adminpass123",
+        )
+
+    def wait(self, timeout=20):
+        return WebDriverWait(self.selenium, timeout)
 
     def login_admin(self):
         self.selenium.get(f"{self.live_server_url}/admin/login/")
-        self.wait().until(EC.presence_of_element_located((By.NAME, "username")))
-
-        self.selenium.find_element(By.NAME, "username").send_keys("isard")
-        self.selenium.find_element(By.NAME, "password").send_keys("pirineus")
+        self.wait().until(EC.presence_of_element_located((By.ID, "id_username")))
+        self.selenium.find_element(By.ID, "id_username").clear()
+        self.selenium.find_element(By.ID, "id_username").send_keys("admin")
+        self.selenium.find_element(By.ID, "id_password").send_keys("adminpass123")
         self.selenium.find_element(By.CSS_SELECTOR, "input[type='submit']").click()
 
-        # Django 5.x: logout es un FORM con id logout-form
-        self.wait().until(EC.presence_of_element_located((By.ID, "logout-form")))
-
-    def open_all_details(self):
-        # En Django 5.x algunos fieldsets vienen dentro de <details> colapsados
-        for d in self.selenium.find_elements(By.CSS_SELECTOR, "details"):
-            is_open = d.get_attribute("open")
-            if not is_open:
-                try:
-                    d.find_element(By.CSS_SELECTOR, "summary").click()
-                except Exception:
-                    pass
+        # Ya dentro del admin
+        self.wait().until(EC.presence_of_element_located((By.ID, "content")))
+        self.assertNotIn("/admin/login/", self.selenium.current_url)
 
     def test_create_group_and_appears_in_user_form(self):
         self.login_admin()
@@ -73,42 +74,18 @@ class AdminGroupsSeleniumTests(StaticLiveServerTestCase):
         self.selenium.find_element(By.ID, "id_name").send_keys(group_name)
         self.selenium.find_element(By.NAME, "_save").click()
 
-        # 4) Verificar que el grupo aparece entre los asignables al usuario
-        self.wait().until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-        assert "/admin/login/" not in self.selenium.current_url, f"Redirigido a login: {self.selenium.current_url}"
+        # Espera a salir del /add/
+        self.wait().until(lambda d: "/admin/auth/group/" in d.current_url and "/add/" not in d.current_url)
+        self.assertTrue(Group.objects.filter(name=group_name).exists(), "El grupo no se guardó en la BD")
 
-        # abrir Permissions si esta colapsado (Django admin puede colapsar fieldsets)
-        try:
-            self.selenium.find_element(By.XPATH, "//summary[contains(.,\"Permissions\")]").click()
-        except Exception:
-            pass
-
-        # espera a que exista el selector de grupos (segun layout de Django)
-        self.wait().until(lambda d: d.find_elements(By.ID, "id_groups_from") or d.find_elements(By.ID, "id_groups"))
-
-        if self.selenium.find_elements(By.ID, "id_groups_from"):
-            self.selenium.find_element(By.XPATH, f"//select[@id=id_groups_from]/option[normalize-space()={group_name}]")
-        else:
-            self.selenium.find_element(By.XPATH, f"//select[@id=id_groups]/option[normalize-space()={group_name}]")
-
-        self.wait().until(EC.presence_of_element_located((By.ID, "content")))
-
-        # 2) Verificar que aparece en la lista de groups
+        # 2) Verificar que aparece en la lista de groups (/admin/auth/group/)
         self.selenium.get(f"{self.live_server_url}/admin/auth/group/")
-
-        # espera a que cargue la página
-        self.wait().until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-
-        # si te ha mandado al login, aquí lo verás claro
-        assert "/admin/login/" not in self.selenium.current_url, f"Redirigido a login: {self.selenium.current_url}"
-
-        # en la vista changelist del admin siempre existe este contenedor
         self.wait().until(EC.presence_of_element_located((By.ID, "changelist")))
 
-        # y el grupo debe aparecer como enlace
-        self.selenium.find_element(By.XPATH, f"//a[normalize-space()='{group_name}']")
+        # Espera explícita a que aparezca el enlace del grupo
+        self.wait().until(EC.presence_of_element_located((By.LINK_TEXT, group_name)))
 
-# 3) Crear un usuario (paso 1)
+        # 3) Crear un usuario (paso 1)
         self.selenium.get(f"{self.live_server_url}/admin/auth/user/add/")
         self.wait().until(EC.presence_of_element_located((By.ID, "id_username")))
 
@@ -120,25 +97,26 @@ class AdminGroupsSeleniumTests(StaticLiveServerTestCase):
         self.selenium.find_element(By.ID, "id_password2").send_keys(new_password)
         self.selenium.find_element(By.NAME, "_save").click()
 
-        # 4) Ahora estamos en el change form del usuario (paso 2)
-        self.wait().until(EC.presence_of_element_located((By.ID, "content")))
-        self.open_all_details()
+        # 4) Ya en el change form del usuario (paso 2)
+        self.wait().until(lambda d: "/admin/auth/user/" in d.current_url and "/change/" in d.current_url)
+        self.assertNotIn("/admin/login/", self.selenium.current_url)
 
-        # 5) El widget de groups suele ser FilteredSelectMultiple:
-        #    id_groups_from contiene los disponibles
-        try:
-            self.wait().until(EC.presence_of_element_located((By.ID, "id_groups_from")))
-            available = self.selenium.find_element(By.ID, "id_groups_from")
-            option = available.find_element(By.XPATH, f".//option[normalize-space()='{group_name}']")
-            # si llega aquí, el grupo aparece como asignable ✅
-            _ = option
-        except Exception:
-            # fallback: a veces puede existir id_groups directamente
-            try:
-                groups = self.selenium.find_element(By.ID, "id_groups")
-                groups.find_element(By.XPATH, f".//option[normalize-space()='{group_name}']")
-            except Exception:
-                raise AssertionError(
-                    f"No encuentro el grupo '{group_name}' en el formulario de usuario. "
-                    f"url={self.selenium.current_url} title={self.selenium.title}"
-                )
+        # En el change form debe existir selector de grupos (filtered o select simple)
+        def group_option_present(d):
+            # FilteredSelectMultiple típico: id_groups_from
+            if d.find_elements(By.ID, "id_groups_from"):
+                return len(d.find_elements(
+                    By.XPATH,
+                    f"//select[@id='id_groups_from']/option[normalize-space()='{group_name}']"
+                )) > 0
+
+            # Select múltiple simple: id_groups
+            if d.find_elements(By.ID, "id_groups"):
+                return len(d.find_elements(
+                    By.XPATH,
+                    f"//select[@id='id_groups']/option[normalize-space()='{group_name}']"
+                )) > 0
+
+            return False
+
+        self.wait().until(group_option_present)
