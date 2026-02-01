@@ -1,3 +1,4 @@
+from django.contrib.auth.models import User
 import os
 import uuid
 from unittest import SkipTest
@@ -14,6 +15,17 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 class AdminGroupsSeleniumTests(StaticLiveServerTestCase):
+
+    def setUp(self):
+        super().setUp()
+        # Superusuario SOLO para tests (en la DB de test)
+        self.admin_username = "admin"
+        self.admin_password = "adminpass123"
+        User.objects.create_superuser(
+            username=self.admin_username,
+            email="admin@example.com",
+            password=self.admin_password,
+        )
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -52,13 +64,38 @@ class AdminGroupsSeleniumTests(StaticLiveServerTestCase):
         return WebDriverWait(self.selenium, timeout)
 
     def login_admin(self):
-        self.selenium.get(f"{self.live_server_url}/admin/login/")
+        # Ir a /admin/ fuerza el flujo con next=/admin/
+        self.selenium.get(f"{self.live_server_url}/admin/")
         self.wait().until(EC.presence_of_element_located((By.ID, "id_username")))
-        self.selenium.find_element(By.ID, "id_username").clear()
-        self.selenium.find_element(By.ID, "id_username").send_keys("admin")
-        self.selenium.find_element(By.ID, "id_password").send_keys("adminpass123")
-        self.selenium.find_element(By.CSS_SELECTOR, "input[type='submit']").click()
 
+        u = self.selenium.find_element(By.ID, "id_username")
+        u.clear()
+        u.send_keys(self.admin_username)
+
+        pw = self.selenium.find_element(By.ID, "id_password")
+        pw.clear()
+        pw.send_keys(self.admin_password)
+
+        # Submit del form (más robusto que buscar un input concreto)
+        self.selenium.find_element(By.CSS_SELECTOR, "form#login-form").submit()
+
+        # Espera a salir del login (o a que aparezca error)
+        def logged_in_or_error(d):
+            if "/admin/login/" not in d.current_url:
+                return True
+            # si sigue en login, mira si hay errores visibles
+            return bool(d.find_elements(By.CSS_SELECTOR, ".errornote")) or bool(d.find_elements(By.CSS_SELECTOR, ".errorlist"))
+
+        self.wait(10).until(logged_in_or_error)
+
+        if "/admin/login/" in self.selenium.current_url:
+            # extrae mensaje de error para debug útil
+            msg = ""
+            try:
+                msg = self.selenium.find_element(By.CSS_SELECTOR, ".errornote").text
+            except Exception:
+                pass
+            raise AssertionError(f"Login admin NO completado. URL={self.selenium.current_url}. Error='{msg}'")
         # Ya dentro del admin
         self.wait().until(EC.presence_of_element_located((By.ID, "content")))
         self.assertNotIn("/admin/login/", self.selenium.current_url)
