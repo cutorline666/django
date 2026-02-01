@@ -1,10 +1,13 @@
 from django.db import models
 
+<<<<<<< HEAD
 # Create your models here.
 import datetime
 from django.db import models
 from django.utils import timezone
 
+=======
+>>>>>>> 40cda58 (Update project (djproject1))
 class Question(models.Model):
     question_text = models.CharField(max_length=200)
     pub_date = models.DateTimeField("date published")
@@ -19,4 +22,7 @@ class Choice(models.Model):
 
     def __str__(self):
         return self.choice_text
+<<<<<<< HEAD
 
+=======
+>>>>>>> 40cda58 (Update project (djproject1))

@@ -1,6 +1,10 @@
 __pycache__/
 *.py[cod]
 .venv/
+<<<<<<< HEAD
+=======
+venv/
+>>>>>>> 40cda58 (Update project (djproject1))
 db.sqlite3
 *.log
 .vscode/
